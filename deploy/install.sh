@@ -1,7 +1,10 @@
 #!/bin/sh
 # hubproxy-lite 一键安装 / 升级 / 卸载 (Alpine + OpenRC)。所有设置都用命令行参数传入, 装完即用。
 #
-# 最常用 (root):
+# 最常用 (root), 不带参数就进入问答向导, 只问端口和来源 IP 两项:
+#   wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/install.sh | sh
+#
+# 想一条命令搞定 (跳过问答):
 #   wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/install.sh | \
 #     sh -s -- --port 8080 --allow 203.0.113.7
 #
@@ -13,8 +16,9 @@ REPO_DEFAULT="admintors/hubproxy-lite"
 usage() {
 cat <<'EOF'
 用法: sh install.sh [参数]
+      不带任何参数 = 进入问答向导 (只问端口和来源 IP)
 
-必填其一:
+配置 (--allow 和 --open 二选一; 用向导时不需要写):
   --allow  IP或网段    只允许这些来源使用, 逗号分隔。例: 203.0.113.7,192.168.0.0/16
   --open               明确表示不做来源限制 (任何人都能用你的流量, 不推荐)
 
@@ -108,6 +112,28 @@ safe() { # 名称 值
   esac
 }
 is_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+ok_port() { is_uint "$1" && [ "$1" -ge 1024 ] && [ "$1" -le 65535 ]; }
+ok_ipv4() { # a.b.c.d 每段 0-255
+  printf %s "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || return 1
+  _o=$IFS; IFS=.; set -- $1; IFS=$_o
+  for _n in "$@"; do [ "$_n" -le 255 ] || return 1; done
+}
+ok_allow_item() { # IP 或 IP/掩码
+  _ip="${1%%/*}"; _m=""
+  case "$1" in */*) _m="${1#*/}"; is_uint "$_m" || return 1 ;; esac
+  case "$_ip" in
+    *:*) printf %s "$_ip" | grep -Eq '^[0-9a-fA-F:.]+$' || return 1
+         [ -z "$_m" ] || [ "$_m" -le 128 ] ;;
+    *)   ok_ipv4 "$_ip" || return 1
+         [ -z "$_m" ] || [ "$_m" -le 32 ] ;;
+  esac
+}
+ok_allow() { # 逗号分隔的列表
+  [ -n "$1" ] || return 1
+  case "$1" in ,*|*,|*,,*) return 1 ;; esac
+  _o=$IFS; IFS=,; set -- $1; IFS=$_o
+  for _i in "$@"; do ok_allow_item "$_i" || return 1; done
+}
 
 [ -z "$PORT" ] || {
   is_uint "$PORT" || die "--port 必须是数字: $PORT"
@@ -125,7 +151,7 @@ if [ -n "$RATE_HOURS" ]; then
 fi
 if [ -n "$ALLOW" ]; then
   safe --allow "$ALLOW"
-  printf %s "$ALLOW" | grep -Eq '^[0-9a-fA-F:.]+(/[0-9]{1,3})?(,[0-9a-fA-F:.]+(/[0-9]{1,3})?)*$' \
+  ok_allow "$ALLOW" \
     || die "--allow 格式不对, 应为 IP 或 IP/掩码, 多个用逗号分隔 (不要有空格): $ALLOW"
 fi
 if [ -n "$PUBLIC_URL" ]; then
@@ -191,13 +217,71 @@ if [ "$UNINSTALL" -eq 1 ]; then
   exit 0
 fi
 
-# 没有配置参数时: 已有配置就沿用, 没有就必须给参数
+# ---------------------------------------------------------------- 交互式向导
+# 通过 wget | sh 运行时 stdin 是管道, 所以问答一律从 /dev/tty 读
+TTY=0
+if [ -r /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then TTY=1; exec 3</dev/tty; fi
+
+ask() { # 提示语 默认值 -> $REPLY
+  printf '%s' "$1" >&2
+  IFS= read -r REPLY <&3 || { echo >&2; die "输入被中断"; }
+  [ -n "$REPLY" ] || REPLY="$2"
+}
+clean() { printf %s "$1" | sed -e 's/，/,/g' -e 's/[[:space:]]//g'; }
+
+interactive() {
+  echo
+  echo "=== hubproxy-lite 安装向导 (直接回车 = 用方括号里的默认值) ==="
+  echo
+  while :; do
+    ask "1/2  监听端口 [$PORT]: " "$PORT"; p=$(clean "$REPLY")
+    if ok_port "$p"; then PORT="$p"; break; fi
+    echo "     端口必须是 1024-65535 的数字 (服务不以 root 运行, 绑不了 1024 以下)" >&2
+  done
+  echo
+  SSHIP=""
+  [ -z "${SSH_CONNECTION:-}" ] || SSHIP="${SSH_CONNECTION%% *}"
+  echo "2/2  允许使用的来源 IP: 填会用这个代理的机器的公网 IP, 多个用逗号分隔,"
+  echo "     可写网段如 192.168.0.0/16。输入 open 表示不限制 (不推荐)。"
+  [ -z "$SSHIP" ] || echo "     检测到你当前 SSH 登录的来源是 $SSHIP; 如果以后用代理的不是这台机器, 请改成它的 IP。"
+  while :; do
+    if [ -n "$SSHIP" ]; then ask "     来源 IP [$SSHIP]: " "$SSHIP"; else ask "     来源 IP: " ""; fi
+    a=$(clean "$REPLY")
+    case "$a" in
+      "") echo "     必须填写。想不限制请输入 open" >&2; continue ;;
+      open|OPEN|Open)
+        ask "     确认不限制来源? 任何人都能消耗你的流量 [y/N]: " n
+        case "$REPLY" in y|Y|yes|YES) OPEN=1; ALLOW=""; break ;; esac
+        continue ;;
+    esac
+    if ok_allow "$a"; then ALLOW="$a"; OPEN=0; break; fi
+    echo "     格式不对: 应为 IP 或 IP/掩码, 多个用英文逗号分隔, 例如 203.0.113.7,192.168.0.0/16" >&2
+  done
+  echo
+  echo "即将安装: 端口 $PORT, 来源 ${ALLOW:-不限制}"
+  ask "确认? [Y/n]: " y
+  case "$REPLY" in n|N|no|NO) echo "已取消"; exit 1 ;; esac
+  HAVE_CFG=1
+}
+
+# 没有配置参数时: 有终端就问答; 没终端则沿用已有配置, 没有配置就报错
 KEEP_CONF=0
 if [ "$HAVE_CFG" -eq 0 ]; then
-  [ -f "$CONF" ] || die "首次安装必须指定来源限制, 例:
+  if [ -f "$CONF" ]; then
+    KEEP_CONF=1
+    if [ "$TTY" -eq 1 ]; then
+      cur=$( ( . "$CONF"; echo "端口 ${HP_LISTEN##*:}, 来源 ${HP_ALLOW_CIDR:-不限制}" ) 2>/dev/null | sed 's/,127\.0\.0\.1,::1//' || true )
+      echo "检测到已有配置: $cur"
+      ask "  [1] 保持现有配置, 只升级程序   [2] 重新配置   (默认 1): " 1
+      if [ "$REPLY" = 2 ]; then KEEP_CONF=0; interactive; fi
+    fi
+  elif [ "$TTY" -eq 1 ]; then
+    interactive
+  else
+    die "没有可用的终端来提问。请带参数运行, 例:
   sh install.sh --port 8080 --allow 你的公网IP
   (sh install.sh --help 查看全部参数)"
-  KEEP_CONF=1
+  fi
 fi
 
 case "$(uname -m)" in
@@ -290,7 +374,7 @@ rc-service hubproxy-lite start || echo "警告: rc-service start 返回失败, �
 ok=0
 i=0
 while [ "$i" -lt 8 ]; do
-  if wget -q -O- "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q ok; then ok=1; break; fi
+  if wget -q -O- "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -qx ok; then ok=1; break; fi
   i=$((i+1)); sleep 1
 done
 
