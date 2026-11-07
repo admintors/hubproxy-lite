@@ -36,5 +36,3 @@ jobs:
             dist/hubproxy-lite-linux-arm64
             dist/SHA256SUMS
             deploy/install.sh
-            deploy/hubproxy-lite.openrc
-            deploy/hubproxy-lite.confd
