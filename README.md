@@ -25,16 +25,32 @@
 
 ## 部署（Alpine LXC）
 
-所有设置都在安装命令里一次给齐，装完即用，不需要再编辑配置文件。root 执行：
+root 执行这一条，然后按提示回答两个问题（端口、来源 IP），直接回车就用默认值：
+
+```sh
+wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/install.sh | sh
+```
+
+```
+=== hubproxy-lite 安装向导 (直接回车 = 用方括号里的默认值) ===
+
+1/2  监听端口 [5000]: 8080
+2/2  允许使用的来源 IP: ...
+     检测到你当前 SSH 登录的来源是 203.0.113.7
+     来源 IP [203.0.113.7]:
+```
+
+脚本会自动下载对应架构的二进制、校验 SHA256、创建服务用户、写好配置、注册 OpenRC 并启动，最后做健康检查。
+输入有误（端口越界、IP 格式不对）会提示并让你重填，不会带着错误配置装下去。
+
+### 不想交互？一条命令带参数
 
 ```sh
 wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/install.sh | \
   sh -s -- --port 8080 --allow 203.0.113.7
 ```
 
-脚本会自动下载对应架构的二进制、校验 SHA256、创建服务用户、写好配置、注册 OpenRC 并启动，最后做健康检查。
-
-### 参数
+### 全部参数
 
 | 参数 | 说明 |
 |---|---|
@@ -60,8 +76,8 @@ wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/in
 
 ### 修改配置 / 升级
 
-- **改配置**：用新参数重新运行安装命令。整份配置按新参数重写，旧配置备份为 `/etc/conf.d/hubproxy-lite.bak`。
-- **升级**：不带任何配置参数重新运行，沿用已有配置，只替换二进制。
+- **改配置**：重新运行安装命令。检测到已有配置时会问你"保持现有配置只升级程序"还是"重新配置"；带参数运行则直接按新参数重写。旧配置备份为 `/etc/conf.d/hubproxy-lite.bak`。
+- **升级**：重新运行安装命令，选 1（默认）即可，沿用已有配置，只替换二进制。
 - **卸载**：`sh install.sh --uninstall`。
 
 ### 服务器连不上 GitHub
