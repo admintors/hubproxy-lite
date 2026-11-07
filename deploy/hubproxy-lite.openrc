@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+# hubproxy-lite 的 OpenRC 服务脚本 (Alpine / LXC)
+# 配置文件: /etc/conf.d/hubproxy-lite  (见同目录 hubproxy-lite.confd)
+
+name="hubproxy-lite"
+description="Docker / GitHub acceleration proxy (lite)"
+command="/usr/local/bin/hubproxy-lite"
+command_user="hubproxy:hubproxy"
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+output_log="/var/log/hubproxy-lite.log"
+error_log="/var/log/hubproxy-lite.log"
+
+# 128MB 机器上, 别让它被 OOM 拖累整个容器: 限制文件句柄
+rc_ulimit="-n 4096"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath -f -m 0640 -o hubproxy:hubproxy /var/log/hubproxy-lite.log
+}

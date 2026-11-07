@@ -1,0 +1,4 @@
+# 二进制由 GitHub Actions 构建并发布到 Releases, 不进仓库
+dist/
+*.tar
+*.log
