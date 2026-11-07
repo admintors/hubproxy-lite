@@ -25,18 +25,59 @@
 
 ## 部署（Alpine LXC）
 
-在能联网的机器上构建（或直接用 `dist/` 里已有的二进制）：
+所有设置都在安装命令里一次给齐，装完即用，不需要再编辑配置文件。root 执行：
+
+```sh
+wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/install.sh | \
+  sh -s -- --port 8080 --allow 203.0.113.7
+```
+
+脚本会自动下载对应架构的二进制、校验 SHA256、创建服务用户、写好配置、注册 OpenRC 并启动，最后做健康检查。
+
+### 参数
+
+| 参数 | 说明 |
+|---|---|
+| `--allow IP,网段` | **必填其一**。只允许这些来源使用，如 `203.0.113.7,192.168.0.0/16`。本机回环会自动加入 |
+| `--open` | 明确表示不限制来源（不推荐） |
+| `--port N` | 监听端口，默认 5000，范围 1024-65535 |
+| `--listen IP` | 监听地址，默认 0.0.0.0 |
+| `--public-url URL` | 对外地址，如 `http://203.0.113.10:8080` |
+| `--max-streams N` | 同时下载数，默认 6 |
+| `--rate-limit N` / `--rate-hours H` | 限流，默认 500 次 / 3 小时 |
+| `--max-file-mb N` | GitHub 单文件上限，默认 2048 |
+| `--image-allow` / `--image-deny` | 镜像黑白名单 |
+| `--registries 前缀=主机,...` | 额外 registry |
+| `--upstream-proxy URL` | 出站代理 |
+| `--trust-proxy` / `--log-access` | 信任 X-Forwarded-For / 记录访问日志 |
+| `--bin PATH` | 用本地二进制（服务器连不上 GitHub 时） |
+| `--repo 用户/仓库` / `--tag vX.Y.Z` | 指定 Release 来源和版本 |
+| `--dry-run` | 只检查参数并打印将生成的配置 |
+| `--uninstall` | 卸载 |
+
+参数在改动系统之前就会全部校验：端口范围、IP/CIDR 格式、值里的危险字符都会被拦下；
+新端口被占用时会在停掉旧服务之前报错，旧服务不受影响。
+
+### 修改配置 / 升级
+
+- **改配置**：用新参数重新运行安装命令。整份配置按新参数重写，旧配置备份为 `/etc/conf.d/hubproxy-lite.bak`。
+- **升级**：不带任何配置参数重新运行，沿用已有配置，只替换二进制。
+- **卸载**：`sh install.sh --uninstall`。
+
+### 服务器连不上 GitHub
+
+在别处下载 `install.sh` 和 `hubproxy-lite-linux-<arch>`，scp 到服务器同一目录：
+
+```sh
+sh install.sh --port 8080 --allow 203.0.113.7
+```
+
+脚本会自动使用同目录下的二进制（本地文件不做 SHA 校验，请自行核对）。
+
+### 自行构建
 
 ```sh
 sh build.sh            # 需要 Go >= 1.22，产出 dist/hubproxy-lite-linux-{amd64,arm64}
-```
-
-把 `dist/` 和 `deploy/` 拷到 Alpine 里，root 执行：
-
-```sh
-sh deploy/install.sh
-vi /etc/conf.d/hubproxy-lite     # 至少设置 HP_ALLOW_CIDR
-rc-service hubproxy-lite restart
 ```
 
 ## 无域名 / 纯 HTTP 怎么用
@@ -74,7 +115,8 @@ curl -fsSL http://<IP>:5000/https://raw.githubusercontent.com/owner/repo/main/in
 
 ## 环境变量
 
-见 `deploy/hubproxy-lite.confd`，每项都有注释。
+一般用 `install.sh` 的参数设置即可，它们会写入 `/etc/conf.d/hubproxy-lite`。
+完整的变量清单和注释见 `deploy/hubproxy-lite.confd`（手动部署时参考）。
 
 ## 测试
 
