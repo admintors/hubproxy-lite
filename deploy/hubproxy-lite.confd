@@ -1,0 +1,56 @@
+# /etc/conf.d/hubproxy-lite  —  OpenRC 会自动把这些变量导入服务环境
+# 只改你需要的行; 没写的都用默认值。
+
+# 监听地址。LXC 里想只让内网/某张网卡访问,就写具体 IP。
+export HP_LISTEN="0.0.0.0:5000"
+
+# ★ 强烈建议设置 ★  只允许这些来源 IP/网段使用(逗号分隔)。
+# 没有域名 + 纯 HTTP + 公网 IP, 不设的话任何人都能白嫖你的带宽。
+# 例: 只允许自己家宽和内网
+# export HP_ALLOW_CIDR="203.0.113.7,192.168.0.0/16,10.0.0.0/8"
+export HP_ALLOW_CIDR=""
+
+# 对外访问地址(用于首页提示和 .sh 脚本内链接改写)。不填则按请求里的 Host 自动推断。
+# export HP_PUBLIC_URL="http://203.0.113.10:5000"
+
+# 限流: 每个 IP 在 HP_RATE_HOURS 小时内最多 HP_RATE_LIMIT 次请求
+export HP_RATE_LIMIT="500"
+export HP_RATE_HOURS="3"
+
+# 同时进行的下载流上限。0.1 核机器建议 4~8, 再大只会互相拖慢
+export HP_MAX_STREAMS="6"
+
+# GitHub 单文件大小上限(MB)
+export HP_MAX_FILE_MB="2048"
+
+# 镜像/仓库 黑白名单(逗号分隔, 支持 * 结尾通配)。白名单非空时只放行名单内的。
+# export HP_ALLOW="library/*,nginx"
+# export HP_DENY="evil/*"
+
+# 额外的 registry 映射  前缀=上游主机  (ghcr.io / quay.io / gcr.io / registry.k8s.io 已内置)
+# export HP_REGISTRIES="docker.elastic.co=docker.elastic.co"
+
+# 上游出站代理(socks5:// 或 http://)
+# export HP_UPSTREAM_PROXY="socks5://127.0.0.1:1080"
+
+# 前面还有反代时才设 true, 才会信任 X-Forwarded-For
+# export HP_TRUST_PROXY="false"
+
+# 是否记录每个请求(会增加磁盘写入,默认关)
+# export HP_LOG_ACCESS="false"
+
+# 内存软上限默认取 cgroup 限额的 70%(没有 cgroup 限额时 96MB)。
+# 要手动指定就取消注释;写了之后程序不再自动调整。
+# export GOMEMLIMIT="90MiB"
+
+# ---- HTTPS (域名 + DNS-01 验证, 不需要开放 80/443). 不设 HP_DOMAIN 就是纯 HTTP ----
+# export HP_DOMAIN="hub.example.com"
+# export HP_EMAIL="you@example.com"
+# DNS 提供商: cloudflare (用 HP_CF_TOKEN) 或 exec (用 HP_DNS_HOOK 指向脚本)
+# export HP_DNS_PROVIDER="cloudflare"
+# export HP_CF_TOKEN=""          # Token 权限: Zone:Zone:Read + Zone:DNS:Edit
+# export HP_CF_ZONE=""           # 可选, 留空自动查找
+# export HP_DNS_HOOK="/root/hook.sh"  # exec 模式: hook.sh present|cleanup <域名> <值>
+# export HP_ACME_STAGING="false" # 首次测试设为 true
+# export HP_CERT_DIR="/var/lib/hubproxy-lite"
+# export HP_DNS_WAIT_SECONDS="120"
