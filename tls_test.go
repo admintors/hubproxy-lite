@@ -44,7 +44,7 @@ func mkCert(t *testing.T, dns string, notBefore, notAfter time.Time) (certPEM, k
 
 func newTestMgr(t *testing.T, domain string) *certManager {
 	t.Helper()
-	return newCertManager(&tlsConfig{Domain: domain, CertDir: t.TempDir()})
+	return newCertManager(&tlsConfig{Domain: domain, CertDir: t.TempDir(), ACMEURL: acmeProdURL})
 }
 
 func writePair(t *testing.T, m *certManager, c, k []byte) {
@@ -513,5 +513,50 @@ func TestObtainRejectsWrongCertKeepsOld(t *testing.T) {
 	got, _ := os.ReadFile(m.certPath())
 	if string(got) != string(c0) {
 		t.Fatal("坏证书覆盖了磁盘上的好证书")
+	}
+}
+
+// ---------------------------------------------------------------- staging 与正式环境切换
+
+// 先用 staging 签了证书, 之后改成正式环境: 磁盘上的 staging 证书不能被当作有效证书继续用。
+func TestCAEnvChangeForcesReissue(t *testing.T) {
+	const dom = "s.example.com"
+	m := newTestMgr(t, dom)
+	m.cfg.ACMEURL = acmeStagingURL
+	now := time.Now()
+	c, k := mkCert(t, dom, now.Add(-time.Hour), now.Add(80*24*time.Hour))
+	if err := m.store(c, k); err != nil { // 以 staging 身份落盘
+		t.Fatal(err)
+	}
+	if err := m.load(); err != nil {
+		t.Fatalf("同一环境重启应能加载: %v", err)
+	}
+
+	// 改成正式环境后重启 (新的 manager, 同一个证书目录)
+	m2 := newCertManager(&tlsConfig{Domain: dom, CertDir: m.cfg.CertDir, ACMEURL: acmeProdURL})
+	if err := m2.load(); err == nil {
+		t.Fatal("环境从 staging 换成正式后, 不应继续使用 staging 签发的证书")
+	}
+	if m2.current() != nil {
+		t.Fatal("被拒绝的证书不应留在内存里")
+	}
+}
+
+// 旧版本 (没有环境标记文件) 留下的证书: 按"未知来源"处理, 只在环境为正式时接受, 其余都重新申请。
+func TestLegacyCertWithoutMarker(t *testing.T) {
+	const dom = "l.example.com"
+	dir := t.TempDir()
+	now := time.Now()
+	c, k := mkCert(t, dom, now.Add(-time.Hour), now.Add(80*24*time.Hour))
+	_ = os.WriteFile(filepath.Join(dir, dom+".crt"), c, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, dom+".key"), k, 0o600)
+
+	prod := newCertManager(&tlsConfig{Domain: dom, CertDir: dir, ACMEURL: acmeProdURL})
+	if err := prod.load(); err != nil {
+		t.Fatalf("无标记文件的证书在正式环境下应可加载: %v", err)
+	}
+	stg := newCertManager(&tlsConfig{Domain: dom, CertDir: dir, ACMEURL: acmeStagingURL})
+	if err := stg.load(); err == nil {
+		t.Fatal("无标记文件的证书在 staging 环境下应被拒绝, 避免误用正式证书当作测试")
 	}
 }

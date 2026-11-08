@@ -25,23 +25,29 @@
 
 ## 部署（Alpine LXC）
 
-root 执行这一条，然后按提示回答两个问题（端口、来源 IP），直接回车就用默认值：
+root 执行这一条，按提示逐项回答，直接回车就用方括号里的默认值：
 
 ```sh
 wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/install.sh | sh
 ```
 
-```
-=== hubproxy-lite 安装向导 (直接回车 = 用方括号里的默认值) ===
+向导依次问三件事，**HTTPS 要不要开是明确的一问，不会被跳过**：
 
-1/2  监听端口 [5000]: 8080
-2/2  允许使用的来源 IP: ...
-     检测到你当前 SSH 登录的来源是 203.0.113.7
-     来源 IP [203.0.113.7]:
+```
+1/3  监听端口 [5000]:
+2/3  来源限制: 填会用这个代理的机器的公网 IP (检测到 SSH 来源会作为默认值)
+3/3  HTTPS: 先说明启用/不启用各是什么、需要什么, 再问 "启用 HTTPS? [y/N]"
+     选 y 后继续问: 域名 / 邮箱 / DNS 验证方式 (Cloudflare 或自定义脚本) / Token (不回显) / 是否用测试环境
 ```
 
-脚本会自动下载对应架构的二进制、校验 SHA256、创建服务用户、写好配置、注册 OpenRC 并启动，最后做健康检查。
-输入有误（端口越界、IP 格式不对）会提示并让你重填，不会带着错误配置装下去。
+选了 HTTPS 之后，**安装前**脚本会用你填的设置真实地写入并删除一条测试 TXT 记录（`_hubproxy-check.<域名>`），
+Token 权限不够、脚本跑不起来这类问题当场就暴露，不用等装完再翻日志。验证失败时可以：重新填写 / 忽略继续 / 不启用 HTTPS。
+
+最后会列出完整的执行摘要（端口、来源、HTTPS、域名、DNS 方式、证书环境、文件位置），确认后才动系统。
+启用 HTTPS 的话，装完会**等证书签发结果并如实报告**（成功、失败原因、或超时仍在重试），不是只说一句"已启动"。
+
+脚本会自动下载对应架构的二进制、校验 SHA256、创建服务用户、写好配置、注册 OpenRC 并启动。
+输入有误（端口越界、IP/域名格式不对）会提示并让你重填，不会带着错误配置装下去。
 
 ### 不想交互？一条命令带参数
 
@@ -67,6 +73,8 @@ wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/in
 | `--dns-hook PATH` | exec 模式的脚本绝对路径 |
 | `--cert-dir PATH` | 证书目录，默认 `/var/lib/hubproxy-lite` |
 | `--acme-staging` | 使用 Let's Encrypt 测试环境 |
+| `--no-https` | 明确关闭 HTTPS，改回纯 HTTP（其它配置保留） |
+| `--skip-dns-check` | 跳过安装前的 DNS 写入测试 |
 | `--max-streams N` | 同时下载数，默认 6 |
 | `--rate-limit N` / `--rate-hours H` | 限流，默认 500 次 / 3 小时 |
 | `--max-file-mb N` | GitHub 单文件上限，默认 2048 |
@@ -84,9 +92,19 @@ wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/in
 
 ### 修改配置 / 升级
 
-- **改配置**：重新运行安装命令。检测到已有配置时会问你"保持现有配置只升级程序"还是"重新配置"；带参数运行则直接按新参数重写。旧配置备份为 `/etc/conf.d/hubproxy-lite.bak`。
-- **升级**：重新运行安装命令，选 1（默认）即可，沿用已有配置，只替换二进制。
-- **卸载**：`sh install.sh --uninstall`。
+重新运行安装命令。检测到已有配置时会先显示当前的端口、来源、HTTPS 状态，再问：
+
+```
+[1] 保持现有配置, 只升级程序 (默认)
+[2] 只修改 HTTPS (开启 / 关闭 / 更换域名或 DNS 设置), 其它配置不动
+[3] 全部重新配置 (端口、来源 IP、HTTPS 全部重新问一遍; 其它高级设置会带过去)
+```
+
+- 从 v0.1.0（纯 HTTP）升级并想启用 HTTPS：选 **2**。端口、来源、限流等其它配置原样保留。
+- 要关闭 HTTPS：选 2 再回答"继续使用 HTTPS? n"，或命令行 `sh install.sh --no-https`。
+- 命令行只带 HTTPS 参数（如 `--domain ...`）且已有配置时，同样只改 HTTPS 那几行。
+- 旧配置备份为 `/etc/conf.d/hubproxy-lite.bak`。
+- **卸载**：`sh install.sh --uninstall`（证书目录不会删）。
 
 ### 服务器连不上 GitHub
 
@@ -134,7 +152,13 @@ sh install.sh --port 8443 --allow 203.0.113.7 --domain hub.example.com \
   --email you@example.com --dns exec --dns-hook /root/hook.sh
 ```
 
-**首次使用建议加 `--acme-staging`**，先用 Let's Encrypt 测试环境确认流程没问题，再去掉它重装。测试证书不受浏览器信任，这是正常的。
+**DNS 预检**：`hubproxy-lite check-dns` 读取和服务相同的环境变量，写入再删除一条 `_hubproxy-check.<域名>` TXT 记录（不碰 `_acme-challenge`），失败会给出具体原因。`install.sh` 在安装前自动调用它。
+
+**测试环境**：想反复试验可加 `--acme-staging`（不占 Let's Encrypt 正式限额，但证书不受浏览器和 Docker 信任）。从测试环境切回正式环境时，程序会发现证书的签发环境变了并自动重新申请，不会继续使用测试证书。
+
+**Cloudflare 的 A 记录请设为"仅 DNS"（灰云）**，不要开代理（橙云），否则非标准端口和大文件下载会出问题。
+
+**exec 脚本**以 `hubproxy` 用户身份运行，脚本及其所在目录必须对其它用户可读/可执行（放 `/usr/local/bin` 即可，不要放 `/root`），`install.sh` 会提前检查这一点。
 
 签发过程：程序启动后写入 TXT 记录，等待解析生效（最多 `HP_DNS_WAIT_SECONDS`，默认 120 秒），通知 CA 验证，签发证书并落盘到 `/var/lib/hubproxy-lite`（私钥权限 0600）。之后每天检查一次，剩余有效期不足 1/3 时自动续期，无需重启。
 

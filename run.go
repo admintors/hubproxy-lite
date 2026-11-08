@@ -19,6 +19,13 @@ func main() {
 		return
 	}
 	log.SetFlags(log.LstdFlags)
+	if len(os.Args) > 1 && os.Args[1] == "check-dns" {
+		if err := runCheckDNS(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "DNS 检查失败:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	cfg, err := loadConfig()
 	if err != nil {

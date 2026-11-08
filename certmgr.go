@@ -103,6 +103,19 @@ func (m *certManager) certPath() string { return filepath.Join(m.cfg.CertDir, m.
 func (m *certManager) keyPath() string  { return filepath.Join(m.cfg.CertDir, m.cfg.Domain+".key") }
 func (m *certManager) acctPath() string { return filepath.Join(m.cfg.CertDir, "account.key") }
 
+// envPath 记录这份证书是由哪个 ACME 服务器签发的。
+// 没有它的话, 先用 staging 测试、再改成正式环境时, 磁盘上不受信任的测试证书会被继续使用。
+func (m *certManager) envPath() string { return filepath.Join(m.cfg.CertDir, m.cfg.Domain+".ca") }
+
+// certEnv 读取标记; 文件不存在 (旧版本留下的证书) 视为正式环境。
+func (m *certManager) certEnv() string {
+	b, err := os.ReadFile(m.envPath())
+	if err != nil {
+		return acmeProdURL
+	}
+	return strings.TrimSpace(string(b))
+}
+
 // load 从磁盘读取证书; 校验域名和有效期, 通过才替换内存里的证书。
 func (m *certManager) load() error {
 	pair, err := tls.LoadX509KeyPair(m.certPath(), m.keyPath())
@@ -112,6 +125,9 @@ func (m *certManager) load() error {
 	leaf, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
 		return err
+	}
+	if got := m.certEnv(); got != m.cfg.ACMEURL {
+		return fmt.Errorf("磁盘上的证书由 %s 签发, 与当前配置 (%s) 不一致, 将重新申请", got, m.cfg.ACMEURL)
 	}
 	if err := leaf.VerifyHostname(m.cfg.Domain); err != nil {
 		return fmt.Errorf("磁盘上的证书不是为 %s 签发的", m.cfg.Domain)
@@ -262,6 +278,10 @@ func (m *certManager) store(certPEM, keyPEM []byte) error {
 		return err
 	}
 	if err := writeFileAtomic(m.certPath(), certPEM, 0o644); err != nil {
+		return err
+	}
+	// 标记最后写: 中途失败时标记仍是旧的, 下次启动会判定不一致而重新申请 (偏保守)
+	if err := writeFileAtomic(m.envPath(), []byte(m.cfg.ACMEURL+"\n"), 0o644); err != nil {
 		return err
 	}
 	return m.load()
