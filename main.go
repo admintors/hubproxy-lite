@@ -515,10 +515,17 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	base := s.baseURL(r)
 	hp := strings.TrimPrefix(strings.TrimPrefix(base, "http://"), "https://")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	var dockerCfg string
+	if strings.HasPrefix(base, "https://") {
+		dockerCfg = fmt.Sprintf(`[Docker] /etc/docker/daemon.json (HTTPS 有可信证书, 不需要 insecure-registries):
+  {"registry-mirrors": ["%s"]}`, base)
+	} else {
+		dockerCfg = fmt.Sprintf(`[Docker] /etc/docker/daemon.json (无域名/HTTP 必须同时配置 insecure-registries):
+  {"registry-mirrors": ["%s"], "insecure-registries": ["%s"]}`, base, hp)
+	}
 	fmt.Fprintf(w, `hubproxy-lite %s  (运行 %s)
 
-[Docker] /etc/docker/daemon.json (无域名/HTTP 必须同时配置 insecure-registries):
-  {"registry-mirrors": ["%s"], "insecure-registries": ["%s"]}
+%s
   然后 systemctl restart docker, 之后 docker pull nginx 即走本代理。
   其它仓库:  docker pull %s/ghcr.io/owner/image:tag
              docker pull %s/quay.io/owner/image:tag
@@ -529,5 +536,5 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
   curl -fsSL %s/https://raw.githubusercontent.com/owner/repo/main/install.sh | sh
 
 健康检查: %s/healthz
-`, version, time.Since(s.start).Round(time.Second), base, hp, hp, hp, base, base, base, base)
+`, version, time.Since(s.start).Round(time.Second), dockerCfg, hp, hp, base, base, base, base)
 }

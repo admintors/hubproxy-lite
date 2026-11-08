@@ -58,7 +58,15 @@ wget -qO- https://github.com/admintors/hubproxy-lite/releases/latest/download/in
 | `--open` | 明确表示不限制来源（不推荐） |
 | `--port N` | 监听端口，默认 5000，范围 1024-65535 |
 | `--listen IP` | 监听地址，默认 0.0.0.0 |
-| `--public-url URL` | 对外地址，如 `http://203.0.113.10:8080` |
+| `--public-url URL` | 对外地址，如 `http://203.0.113.10:8080`（启用 HTTPS 时自动为 `https://域名[:端口]`） |
+| `--domain 域名` | 启用 HTTPS 并指定域名，见上文「HTTPS」一节 |
+| `--email 邮箱` | ACME 账户邮箱（建议填写，用于证书到期提醒） |
+| `--dns cloudflare\|exec` | DNS 验证方式（启用 HTTPS 时必填） |
+| `--cf-token TOKEN` | Cloudflare API Token（也可用环境变量 `HP_CF_TOKEN`） |
+| `--cf-zone ID` | Cloudflare Zone ID（可选，不填会自动查找） |
+| `--dns-hook PATH` | exec 模式的脚本绝对路径 |
+| `--cert-dir PATH` | 证书目录，默认 `/var/lib/hubproxy-lite` |
+| `--acme-staging` | 使用 Let's Encrypt 测试环境 |
 | `--max-streams N` | 同时下载数，默认 6 |
 | `--rate-limit N` / `--rate-hours H` | 限流，默认 500 次 / 3 小时 |
 | `--max-file-mb N` | GitHub 单文件上限，默认 2048 |
@@ -94,6 +102,50 @@ sh install.sh --port 8080 --allow 203.0.113.7
 
 ```sh
 sh build.sh            # 需要 Go >= 1.22，产出 dist/hubproxy-lite-linux-{amd64,arm64}
+```
+
+## HTTPS（域名 + DNS 验证）
+
+适用于端口 80/443 都不能用的情况。程序内置 ACME 客户端，用 **DNS-01** 验证域名，不需要开放任何入站端口，HTTPS 跑在你选的端口上。证书是 Let's Encrypt 的受信任证书，Docker 客户端不需要 `insecure-registries`。
+
+前提：
+1. 一个域名，并把它的 A 记录指向这台服务器的公网 IP（例：`hub.example.com`）。
+2. DNS 解析商是 Cloudflare，或者你自己写一个 DNS 脚本（见下）。
+
+**Cloudflare**：创建 API Token，权限只给两条：`Zone : Zone : Read` 和 `Zone : DNS : Edit`，范围限定到该域名所在的 Zone。
+
+```sh
+sh install.sh --port 8443 --allow 203.0.113.7 \
+  --domain hub.example.com --email you@example.com \
+  --dns cloudflare --cf-token <你的Token>
+```
+
+安装向导也会问这些问题，Token 输入时不回显。
+
+**自定义 DNS 脚本（exec）**：适用于其它解析商。脚本由程序以参数调用，不经过 shell：
+
+```
+hook.sh present <完整域名> <TXT值>    # 写入 _acme-challenge.<域名> 的 TXT 记录
+hook.sh cleanup <完整域名> <TXT值>    # 删除该记录
+```
+
+```sh
+sh install.sh --port 8443 --allow 203.0.113.7 --domain hub.example.com \
+  --email you@example.com --dns exec --dns-hook /root/hook.sh
+```
+
+**首次使用建议加 `--acme-staging`**，先用 Let's Encrypt 测试环境确认流程没问题，再去掉它重装。测试证书不受浏览器信任，这是正常的。
+
+签发过程：程序启动后写入 TXT 记录，等待解析生效（最多 `HP_DNS_WAIT_SECONDS`，默认 120 秒），通知 CA 验证，签发证书并落盘到 `/var/lib/hubproxy-lite`（私钥权限 0600）。之后每天检查一次，剩余有效期不足 1/3 时自动续期，无需重启。
+
+签发失败时服务不会退出，会按 5 分钟、10 分钟…… 逐步退避重试（封顶 1 小时）。失败原因在日志 `/var/log/hubproxy-lite.log` 里。在证书就绪之前，HTTPS 握手会失败。
+
+Docker 配置（有效证书，不需要 insecure-registries）：
+
+```json
+{
+  "registry-mirrors": ["https://hub.example.com:8443"]
+}
 ```
 
 ## 无域名 / 纯 HTTP 怎么用

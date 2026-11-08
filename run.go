@@ -24,6 +24,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("配置错误: %v", err)
 	}
+	tcfg, err := loadTLSConfig()
+	if err != nil {
+		log.Fatalf("配置错误: %v", err)
+	}
 	memLimit := tuneRuntime()
 	srv, err := newServer(cfg)
 	if err != nil {
@@ -51,14 +55,37 @@ func main() {
 	if err != nil {
 		log.Fatalf("监听 %s 失败: %v", cfg.Listen, err)
 	}
-	log.Printf("hubproxy-lite %s 已启动: %s | 并发流 %d | 限流 %d/%s | 内存软上限 %s",
-		version, cfg.Listen, cfg.MaxStreams, cfg.RateLimit, cfg.RatePeriod, fmtLimit(memLimit))
+	scheme := "http"
+	if tcfg != nil {
+		scheme = "https"
+		cm := newCertManager(tcfg)
+		hs.TLSConfig = cm.tlsConfig()
+		// 未设置 HP_PUBLIC_URL 时, 用域名+端口生成, 首页提示才是对的
+		if cfg.PublicURL == "" {
+			_, port, _ := net.SplitHostPort(cfg.Listen)
+			srv.cfg.PublicURL = "https://" + tcfg.Domain
+			if port != "443" {
+				srv.cfg.PublicURL += ":" + port
+			}
+		}
+		certCtx, certCancel := context.WithCancel(context.Background())
+		defer certCancel()
+		go cm.run(certCtx)
+	}
+	log.Printf("hubproxy-lite %s 已启动: %s://%s | 并发流 %d | 限流 %d/%s | 内存软上限 %s",
+		version, scheme, cfg.Listen, cfg.MaxStreams, cfg.RateLimit, cfg.RatePeriod, fmtLimit(memLimit))
 	if len(cfg.AllowCIDR) == 0 && len(cfg.Allow) == 0 {
 		log.Printf("提示: 未设置 HP_ALLOW_CIDR / HP_ALLOW, 当前是对所有能访问该端口的人开放的")
 	}
 
 	errc := make(chan error, 1)
-	go func() { errc <- hs.Serve(ln) }()
+	go func() {
+		if tcfg != nil {
+			errc <- hs.ServeTLS(ln, "", "") // 证书由 TLSConfig.GetCertificate 提供, 支持热更新
+		} else {
+			errc <- hs.Serve(ln)
+		}
+	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
